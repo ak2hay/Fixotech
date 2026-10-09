@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --canvas: 245 246 248;
+    --surface: 255 255 255;
+    --line: 231 233 238;
+    --fg: 17 19 24;
+    --muted: 102 110 124;
+    --subtle: 152 160 173;
+    --sidebar: 15 17 21;
+    --sidebar-fg: 236 238 242;
+    --sidebar-muted: 140 147 160;
+    --sidebar-hover: 32 35 42;
+    --accent: 242 107 29;
+    --accent-fg: 255 255 255;
+    --accent-soft: 254 240 230;
+    --accent-strong: 214 86 12;
+    --success: 22 150 82;
+    --success-soft: 226 246 234;
+    --warning: 202 120 8;
+    --warning-soft: 254 243 219;
+    --danger: 214 48 49;
+    --danger-soft: 253 232 232;
+    --info: 37 99 235;
+    --info-soft: 230 238 254;
+  }
+
+  * { box-sizing: border-box; border-color: rgb(var(--line)); }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: rgb(var(--canvas));
+    color: rgb(var(--fg));
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select, textarea { font: inherit; }
+  ::selection { background: rgb(var(--accent) / 0.2); }
+}
+
+@layer utilities {
+  .tabular { font-variant-numeric: tabular-nums; }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: rgb(var(--sidebar-hover)) transparent; }
+}

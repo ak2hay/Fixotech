@@ -1,0 +1,35 @@
+{
+  "name": "fixotec-one",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @fixotec/api --filter @fixotec/web --filter @fixotec/portal --filter @fixotec/erp dev",
+    "build": "pnpm --filter @fixotec/shared build && pnpm --filter @fixotec/db build && pnpm --filter @fixotec/api build && pnpm --filter @fixotec/web build && pnpm --filter @fixotec/portal build && pnpm --filter @fixotec/erp build",
+    "typecheck": "pnpm --filter @fixotec/shared typecheck && pnpm --filter @fixotec/db typecheck && pnpm --filter @fixotec/api typecheck && pnpm --filter @fixotec/ui typecheck && pnpm --filter @fixotec/web typecheck && pnpm --filter @fixotec/portal typecheck && pnpm --filter @fixotec/erp typecheck",
+    "lint": "eslint .",
+    "audit:coverage": "node scripts/audit-coverage.mjs",
+    "test": "vitest run",
+    "test:e2e": "vitest run --config vitest.e2e.config.mts",
+    "db:up": "docker compose up -d",
+    "db:generate": "pnpm --filter @fixotec/db generate",
+    "db:push": "pnpm --filter @fixotec/db push",
+    "db:seed": "pnpm --filter @fixotec/db seed",
+    "setup": "pnpm db:up && pnpm db:generate && pnpm db:push && pnpm --filter @fixotec/shared build && pnpm --filter @fixotec/db build && pnpm db:seed",
+    "smoke": "node scripts/smoke.mjs",
+    "import:fixotec:crawl": "node scripts/import-fixotec/crawl.mjs",
+    "import:fixotec:load": "pnpm --filter @fixotec/db import:fixotec",
+    "postinstall": "pnpm --filter @fixotec/shared build",
+    "vm:up": "docker compose -f docker-compose.prod.yml up -d --build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "eslint": "^9.36.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.44.0",
+    "vitest": "^3.2.7"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.24.0"
+}

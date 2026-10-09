@@ -1,0 +1,22 @@
+@import "../../../packages/ui/styles.css";
+
+:root {
+  --canvas: 244 246 251;
+  --surface: 255 255 255;
+  --line: 230 234 242;
+  --fg: 15 23 42;
+  --muted: 100 116 139;
+  --subtle: 148 163 184;
+  --accent: 29 91 245;
+  --accent-fg: 255 255 255;
+  --accent-soft: 234 241 255;
+  --accent-strong: 22 72 204;
+  --success: 22 163 74;
+  --success-soft: 220 252 231;
+  --warning: 217 119 6;
+  --warning-soft: 254 243 199;
+  --danger: 220 38 38;
+  --danger-soft: 254 226 226;
+  --info: 37 99 235;
+  --info-soft: 219 234 254;
+}

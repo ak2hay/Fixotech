@@ -1,0 +1,65 @@
+import type { Config } from "tailwindcss";
+
+const config: Config = {
+  content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      colors: {
+        paper: "#ffffff",
+        mist: "#f4f6f8",
+        steel: "#e2e6ea",
+        rule: "#d3d9de",
+        slate: "#5d6873",
+        graphite: "#1c2228",
+        ink: "#11161b",
+        void: "#07090c",
+        panel: "#0d1117",
+        line: "#1d2630",
+        haze: "#8a96a3",
+        cyan: { DEFAULT: "#3fd0ff", dim: "#1b6f8c", soft: "rgba(63,208,255,0.12)" },
+        accent: { DEFAULT: "#e21f26", dark: "#b9151b", soft: "#fdecec", glow: "#ff3b42" },
+      },
+      fontFamily: {
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
+        display: ["var(--font-display)", "var(--font-sans)", "sans-serif"],
+        mono: ["var(--font-mono)", "ui-monospace", "monospace"],
+      },
+      maxWidth: { site: "84rem" },
+      boxShadow: {
+        tile: "0 1px 0 rgba(17,22,27,0.04), 0 8px 24px -12px rgba(17,22,27,0.18)",
+        glow: "0 0 0 1px rgba(63,208,255,0.35), 0 0 32px -6px rgba(63,208,255,0.45)",
+        "glow-red": "0 0 0 1px rgba(226,31,38,0.5), 0 10px 40px -8px rgba(226,31,38,0.6)",
+      },
+      keyframes: {
+        rise: { from: { opacity: "0", transform: "translateY(16px)" }, to: { opacity: "1", transform: "none" } },
+        fade: { from: { opacity: "0" }, to: { opacity: "1" } },
+        dash: { from: { strokeDashoffset: "var(--dash, 1000)" }, to: { strokeDashoffset: "0" } },
+        scan: { "0%": { transform: "translateY(-100%)" }, "100%": { transform: "translateY(100%)" } },
+        "scan-x": { "0%": { transform: "translateX(-100%)" }, "100%": { transform: "translateX(100%)" } },
+        "pulse-node": { "0%, 100%": { opacity: "0.35", transform: "scale(1)" }, "50%": { opacity: "1", transform: "scale(1.35)" } },
+        marquee: { from: { transform: "translateX(0)" }, to: { transform: "translateX(-50%)" } },
+        "grid-pan": { from: { backgroundPosition: "0 0, 0 0, 0 0, 0 0" }, to: { backgroundPosition: "96px 96px, 96px 96px, 24px 24px, 24px 24px" } },
+        blink: { "0%, 100%": { opacity: "1" }, "50%": { opacity: "0" } },
+        grow: { from: { transform: "scaleX(0)" }, to: { transform: "scaleX(1)" } },
+        drop: { "0%": { transform: "translate(-50%, 0)", opacity: "0" }, "30%": { opacity: "1" }, "100%": { transform: "translate(-50%, 40px)", opacity: "0" } },
+        "letter-in": { from: { opacity: "0", transform: "translateY(0.6em) rotateX(-80deg)", filter: "blur(6px)" }, to: { opacity: "1", transform: "none", filter: "blur(0)" } },
+      },
+      animation: {
+        rise: "rise 0.6s cubic-bezier(.2,.7,.2,1) both",
+        fade: "fade 0.5s ease both",
+        dash: "dash 2.4s cubic-bezier(.6,0,.2,1) forwards",
+        scan: "scan 3.5s linear infinite",
+        "scan-x": "scan-x 2.8s linear infinite",
+        "pulse-node": "pulse-node 2.4s ease-in-out infinite",
+        marquee: "marquee 40s linear infinite",
+        "grid-pan": "grid-pan 18s linear infinite",
+        blink: "blink 1.1s steps(1) infinite",
+        grow: "grow 0.9s cubic-bezier(.7,0,.2,1) 0.2s both",
+        drop: "drop 1.8s cubic-bezier(.6,0,.4,1) infinite",
+        "letter-in": "letter-in 0.7s cubic-bezier(.2,.7,.2,1) both",
+      },
+    },
+  },
+  plugins: [],
+};
+export default config;
