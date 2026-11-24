@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+/** Production deploys come from GitHub `main` via the Vercel Git integration. */
+
 type RemotePattern = { protocol: "http" | "https"; hostname: string; port?: string; pathname: string };
 
 const dev = process.env.NODE_ENV !== "production";

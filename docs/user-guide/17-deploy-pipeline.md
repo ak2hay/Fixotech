@@ -1,5 +1,7 @@
 # 17. Deploy pipeline
 
+This chapter is also the smoke-test note for the GitHub deploy pipeline: a docs change alone should not rebuild the API.
+
 GitHub is the single deploy path for Fixotec. Push to `main` on `ak2hay/Fixotech` (or run the API workflow by hand) to ship changes. Do not copy a tarball onto the VM or run `vercel --prod` as the normal release process.
 
 ## Frontends (Vercel)

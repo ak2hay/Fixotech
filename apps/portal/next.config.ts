@@ -1,5 +1,7 @@
 import type { NextConfig } from "next";
 
+/** Production deploys come from GitHub `main` via the Vercel Git integration. */
+
 const dev = process.env.NODE_ENV !== "production";
 
 /** All API traffic goes through the same-origin /api/v1 proxy, so the policy can stay on 'self'. */
