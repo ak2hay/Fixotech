@@ -7,9 +7,9 @@ import { api } from "../../lib/api";
 import { DEMO_MODE } from "../../lib/demo";
 
 const HIGHLIGHTS = [
-  "Project folders for Revit, IFC and CAD files",
-  "Version history, approval and check-out",
-  "In-browser 3D preview for IFC exports",
+  "Revit Library with large preview tiles and company folders",
+  "Version history, Public or Draft status, and downloads",
+  "In-browser 3D preview when an IFC is attached",
 ];
 
 /** Only same-site relative paths, so the login page can't be used as an open redirect. */
