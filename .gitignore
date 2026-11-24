@@ -16,3 +16,4 @@ packages/shared/dist
 Thumbs.db
 *.tsbuildinfo
 backups
+.env*
