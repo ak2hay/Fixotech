@@ -1,4 +1,12 @@
 import tseslint from "typescript-eslint";
+import nextPlugin from "@next/eslint-plugin-next";
+import reactHooks from "eslint-plugin-react-hooks";
+
+const nextAppFiles = [
+  "apps/web/**/*.{js,jsx,ts,tsx}",
+  "apps/portal/**/*.{js,jsx,ts,tsx}",
+  "apps/erp/**/*.{js,jsx,ts,tsx}",
+];
 
 export default tseslint.config(
   {
@@ -17,6 +25,30 @@ export default tseslint.config(
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
       "@typescript-eslint/no-empty-object-type": "off",
+    },
+  },
+  {
+    ...nextPlugin.flatConfig.recommended,
+    files: nextAppFiles,
+  },
+  {
+    files: nextAppFiles,
+    plugins: {
+      "react-hooks": reactHooks,
+    },
+    rules: {
+      // App Router monorepo: this rule looks for a pages/ dir relative to cwd.
+      "@next/next/no-html-link-for-pages": "off",
+      // Register the classic hooks rules so disable comments resolve, without
+      // turning on the much larger react-hooks v7 recommended set.
+      "react-hooks/rules-of-hooks": "error",
+      "react-hooks/exhaustive-deps": "warn",
+    },
+  },
+  {
+    files: ["**/*.cjs"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
   {
