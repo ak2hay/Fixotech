@@ -41,15 +41,17 @@ export function FamilyThumb({
     };
   }, [documentId, version]);
 
-  if (failed || (!src && failed)) {
+  if (failed) {
     return <Placeholder size={size} className={className} label={alt} />;
   }
   if (!src) {
     return <div className={["animate-pulse bg-canvas", className].filter(Boolean).join(" ")} aria-hidden />;
   }
-  return {/* Authenticated blob preview; next/image cannot send the session cookie. */}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={alt} className={className} onError={() => setFailed(true)} />;
+  // Authenticated blob preview; next/image cannot send the session cookie.
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img src={src} alt={alt} className={className} onError={() => setFailed(true)} />
+  );
 }
 
 function Placeholder({ size, className, label }: { size: "tile" | "row" | "hero"; className?: string; label: string }) {
