@@ -15,7 +15,7 @@ The four Vercel projects in the `akshrkdgmailcoms-projects` team are connected t
 | `fixotec-erp` | `apps/erp` | https://fixotec-erp.rkyves.com |
 | `fixotec-bim` | `apps/bim` | https://bim.rkyves.com |
 
-Each project has an Ignored Build Step (`deploy/vercel-ignore.sh`) so a push only rebuilds that app when `apps/<app>`, shared packages, or the workspace lockfile/tooling changed. A docs-only commit should skip all four frontend builds.
+An Ignored Build Step script lives at `deploy/vercel-ignore.sh` (build only when `apps/<app>`, shared packages, or workspace lockfile/tooling changed). It is **not** enabled on the Vercel projects today: Vercel runs that command before a git checkout is available, `git rev-parse` fails, and a missing script exits 127, which Vercel treats as a failed production deploy rather than "just build anyway." Until that can be done safely, every push to `main` rebuilds all four frontends.
 
 Environment variables and custom domains stay in the Vercel project settings; they are not committed.
 
