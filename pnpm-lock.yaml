@@ -158,6 +158,61 @@ importers:
         specifier: ^5.9.2
         version: 5.9.3
 
+  apps/bim:
+    dependencies:
+      '@fixotec/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@fixotec/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      '@tanstack/react-query':
+        specifier: ^5.104.0
+        version: 5.104.0(react@19.3.0)
+      lucide-react:
+        specifier: ^0.544.0
+        version: 0.544.0(react@19.3.0)
+      next:
+        specifier: ^15.5.4
+        version: 15.5.27(@babel/core@7.29.13(supports-color@8.1.1))(@opentelemetry/api@1.9.1)(@types/node@24.19.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react:
+        specifier: ^19.1.1
+        version: 19.3.0
+      react-dom:
+        specifier: ^19.1.1
+        version: 19.3.0(react@19.3.0)
+      three:
+        specifier: ^0.186.1
+        version: 0.186.1
+      web-ifc:
+        specifier: ^0.0.72
+        version: 0.0.72
+    devDependencies:
+      '@types/node':
+        specifier: ^24.5.2
+        version: 24.19.0
+      '@types/react':
+        specifier: ^19.1.13
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.1.9
+        version: 19.3.0(@types/react@19.3.0)
+      '@types/three':
+        specifier: ^0.186.0
+        version: 0.186.0
+      autoprefixer:
+        specifier: ^10.4.21
+        version: 10.6.1(postcss@8.5.28)
+      postcss:
+        specifier: '>=8.5.18 <9'
+        version: 8.5.28
+      tailwindcss:
+        specifier: ^3.4.17
+        version: 3.4.19(tsx@4.23.15)
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
   apps/erp:
     dependencies:
       '@fixotec/shared':
@@ -4235,6 +4290,9 @@ packages:
       jsdom:
         optional: true
 
+  web-ifc@0.0.72:
+    resolution: {integrity: sha512-tedfOr6X9wMnOtYCRyqnxauVGqMWsNKnfqwLtfLXZBfzN3CrpRlAc+vQyAE3HR4M/UN4+kGeIkjkjMl0epgxmw==}
+
   webgl-constants@1.1.1:
     resolution: {integrity: sha512-LkBXKjU5r9vAW7Gcu3T5u+5cvSvh5WwINdr0C+9jpzVB41cjQAP5ePArDtk/WHYdVj0GefCgM73BA7FlIiNtdg==}
 
@@ -8206,6 +8264,8 @@ snapshots:
       - terser
       - tsx
       - yaml
+
+  web-ifc@0.0.72: {}
 
   webgl-constants@1.1.1: {}
 

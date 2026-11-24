@@ -6,6 +6,7 @@ import { AuthUser, RequirePermissions, can, isExternal, seesCost } from "./http"
 import { PrismaService } from "./prisma.service";
 import { CUSTOMER_QUOTE_STATUSES, customerScope, documentAudience, documentScope, healthOf, mediaPath, openIssueWhere, progressOf, projectScope, quoteScope } from "./scope";
 import { toPlain } from "./services";
+import { releasedVersionSome, releasedVersions } from "./files";
 import { CAD_CATEGORIES } from "./uploads";
 
 type ReqUser = { user: AuthUser };
@@ -503,11 +504,19 @@ export class OverviewController {
         ? { OR: [{ entityType: "product", entityId: query.productId }, { entityType: "variant", entityId: { in: productVariants.map((row) => row.id) } }] }
         : {};
     const scope = await documentScope(this.prisma, req.user);
+    const external = isExternal(req.user);
     const items = await this.prisma.document.findMany({
-      where: { AND: [scope, entity], category: { in: categories }, audiences: audience.length ? { hasSome: audience } : undefined, title: query.q ? { contains: query.q, mode: "insensitive" } : undefined },
+      where: {
+        AND: [scope, entity],
+        category: { in: categories },
+        audiences: audience.length ? { hasSome: audience } : undefined,
+        title: query.q ? { contains: query.q, mode: "insensitive" } : undefined,
+        folderId: query.folderId === "root" ? null : query.folderId || undefined,
+        versions: releasedVersionSome(external),
+      },
       orderBy: { updatedAt: "desc" },
       take: 120,
-      include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+      include: { versions: { where: releasedVersions(external), orderBy: { version: "desc" }, take: 1 }, checkedOutBy: { select: { id: true, name: true } } },
     });
     const idsOf = (type: string) => items.filter((doc) => doc.entityType === type && doc.entityId).map((doc) => doc.entityId!);
     const [projectIds, productIds, variantIds] = [idsOf("project"), idsOf("product"), idsOf("variant")];
@@ -519,7 +528,7 @@ export class OverviewController {
     ]);
     const names = new Map([...projects, ...products, ...variants.map((row) => ({ id: row.id, name: `${row.product.name} · ${row.articleNumber} ${row.name}` }))].map((row) => [row.id, row.name]));
     const downloadCount = new Map(downloads.map((row) => [row.documentId, row._count._all]));
-    const counts = await this.prisma.document.groupBy({ by: ["category"], where: { AND: [scope], category: { in: CAD_CATEGORIES }, audiences: audience.length ? { hasSome: audience } : undefined }, _count: { _all: true } });
+    const counts = await this.prisma.document.groupBy({ by: ["category"], where: { AND: [scope], category: { in: CAD_CATEGORIES }, audiences: audience.length ? { hasSome: audience } : undefined, versions: releasedVersionSome(external) }, _count: { _all: true } });
     return {
       items: items.map((doc) => ({
         id: doc.id,
@@ -534,7 +543,11 @@ export class OverviewController {
         fileName: doc.versions[0]?.fileName,
         sizeBytes: doc.versions[0]?.sizeBytes || 0,
         hasThumbnail: Boolean(doc.versions[0]?.thumbnailKey),
-        downloads: isExternal(req.user) ? undefined : downloadCount.get(doc.id) || 0,
+        folderId: doc.folderId,
+        checkedOutById: doc.checkedOutById,
+        checkedOutBy: doc.checkedOutBy,
+        checkedOutAt: doc.checkedOutAt,
+        downloads: external ? undefined : downloadCount.get(doc.id) || 0,
       })),
       counts: Object.fromEntries(counts.map((row) => [row.category, row._count._all])),
     };

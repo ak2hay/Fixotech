@@ -1,12 +1,15 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
   Injectable,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -25,7 +28,8 @@ import { z } from "zod";
 import { approvalRuleSchema, matchesCondition } from "@fixotec/shared";
 import { recordDownload, streamBundle, streamFile } from "./documents";
 import { env } from "./env";
-import { AuthUser, Public, RequirePermissions, assertCan, assertStaff, clientIp, isExternal, pageOf, parseBody } from "./http";
+import { checkinError, checkoutError, folderName, MULTIPART_THRESHOLD_BYTES, multipartPlan, uploadLockError } from "./files";
+import { AuthUser, Public, RequirePermissions, assertCan, assertStaff, can, clientIp, isExternal, pageOf, parseBody } from "./http";
 import { PrismaService } from "./prisma.service";
 import { documentAudience, documentScope } from "./scope";
 import { AuditService, NotifyService, StorageService, Tx, WorkflowService, contentDisposition } from "./services";
@@ -56,6 +60,7 @@ const documentUploadSchema = z.object({
   category: z.string().trim().toUpperCase().regex(/^[A-Z_]{2,40}$/).optional(),
   entityType: z.enum(DOCUMENT_ENTITIES).optional(),
   entityId: z.string().trim().max(64).optional(),
+  folderId: z.preprocess((value) => (value === "" || value === "root" ? undefined : value), z.string().trim().max(64).optional()),
   audiences: csvList(AUDIENCES),
   notes: z.string().trim().max(2000).optional(),
 });
@@ -63,7 +68,31 @@ const versionUploadSchema = z.object({ notes: z.string().trim().max(2000).option
 /** Large and presigned uploads can create a document or add a version to one (`documentId`). */
 const targetUploadSchema = documentUploadSchema.extend({ documentId: z.string().trim().max(64).optional() });
 const presignSchema = targetUploadSchema.extend({ fileName: z.string().trim().min(1).max(255), size: z.coerce.number().int().positive() });
-const completeSchema = z.object({ ticket: z.string().min(20).max(8000) }).strict();
+const completeSchema = z
+  .object({
+    ticket: z.string().min(20).max(8000),
+    parts: z.array(z.object({ partNumber: z.coerce.number().int().min(1).max(10_000), etag: z.string().trim().min(1).max(200) })).max(10_000).optional(),
+  })
+  .strict();
+const multipartPartsSchema = z
+  .object({
+    ticket: z.string().min(20).max(8000),
+    partNumbers: z.array(z.coerce.number().int().min(1).max(10_000)).min(1).max(200),
+  })
+  .strict();
+const folderCreateSchema = z.object({
+  name: z.string().min(1).max(80),
+  parentId: z.preprocess((value) => (value === "" ? undefined : value), z.string().trim().max(64).optional()),
+  entityType: z.enum(DOCUMENT_ENTITIES).optional(),
+  entityId: z.string().trim().max(64).optional(),
+});
+const folderUpdateSchema = z.object({
+  name: z.string().min(1).max(80).optional(),
+  parentId: z.union([z.string().trim().max(64), z.null()]).optional(),
+});
+const moveSchema = z.object({ folderId: z.union([z.string().trim().max(64), z.null()]) }).strict();
+const checkinSchema = z.object({ force: z.boolean().optional() }).strict();
+
 const bundleSchema = z.object({
   entityType: z.enum(DOCUMENT_ENTITIES),
   entityId: z.string().trim().min(1).max(64),
@@ -76,7 +105,7 @@ const bundleSchema = z.object({
 
 type UploadTarget = z.infer<typeof targetUploadSchema>;
 type StoredFile = { key: string; fileName: string; mimeType: string; sizeBytes: number; thumbnailKey: string | null };
-type UploadTicket = { purpose: "upload"; uid: string; key: string; size: number; fileName: string; target: UploadTarget };
+type UploadTicket = { purpose: "upload"; uid: string; key: string; size: number; fileName: string; target: UploadTarget; uploadId?: string; mode?: "s3" | "s3-multipart" };
 const versionStatusSchema = z.object({ status: z.enum(["DRAFT", "INTERNAL_REVIEW", "CLIENT_REVIEW", "APPROVED"]).default("APPROVED") }).strict();
 const shareSchema = z.object({ version: z.coerce.number().int().min(1).optional(), days: z.coerce.number().int().min(1).max(30).default(7) }).strict();
 const decisionSchema = z.object({ decision: z.enum(["APPROVED", "REJECTED"]), note: z.string().trim().max(2000).optional() }).strict();
@@ -279,9 +308,14 @@ export class PlatformController {
         category: query.category ? String(query.category).slice(0, 40) : undefined,
         audiences: audience.length ? { hasSome: audience } : undefined,
         title: query.q ? { contains: String(query.q).slice(0, 100), mode: "insensitive" } : undefined,
+        folderId: query.folderId === "root" ? null : query.folderId || undefined,
         versions: external ? { some: { status: { in: PORTAL_VERSION_STATUSES } } } : undefined,
       },
-      include: { versions: { where: external ? { status: { in: PORTAL_VERSION_STATUSES } } : undefined, orderBy: { version: "desc" }, omit: { storageKey: true } } },
+      include: {
+        versions: { where: external ? { status: { in: PORTAL_VERSION_STATUSES } } : undefined, orderBy: { version: "desc" }, omit: { storageKey: true } },
+        checkedOutBy: { select: { id: true, name: true } },
+        folder: { select: { id: true, name: true, parentId: true } },
+      },
       orderBy: { updatedAt: "desc" },
       take: 200,
     });
@@ -341,21 +375,56 @@ export class PlatformController {
     const category = await this.prepareTarget(target);
     const named = inspectName(originalName, size, DOCUMENT_KINDS, this.maxBytesFor(category));
     const key = this.keyFor(target, named.fileName);
+    if (size >= MULTIPART_THRESHOLD_BYTES) {
+      const uploadId = await this.storage.createMultipart(key, named.mimeType);
+      if (uploadId) {
+        const plan = multipartPlan(size);
+        const ticket: UploadTicket = { purpose: "upload", uid: req.user.id, key, size, fileName: named.fileName, target, uploadId, mode: "s3-multipart" };
+        return { mode: "s3-multipart" as const, partSize: plan.partSize, partCount: plan.partCount, maxBytes: this.maxBytesFor(category), ticket: await this.jwt.signAsync(ticket, { expiresIn: "6h" }) };
+      }
+    }
     const url = await this.storage.presignPut(key, named.mimeType, size);
     if (!url) return { mode: "multipart" as const, path: "/documents/large", maxBytes: this.maxBytesFor(category) };
-    const ticket: UploadTicket = { purpose: "upload", uid: req.user.id, key, size, fileName: named.fileName, target };
+    const ticket: UploadTicket = { purpose: "upload", uid: req.user.id, key, size, fileName: named.fileName, target, mode: "s3" };
     return { mode: "s3" as const, url, headers: { "Content-Type": named.mimeType }, ticket: await this.jwt.signAsync(ticket, { expiresIn: "2h" }) };
+  }
+
+  @Post("documents/uploads/multipart/parts")
+  @RequirePermissions("documents.create")
+  async multipartParts(@Body() raw: unknown, @Req() req: ReqUser) {
+    const input = parseBody(multipartPartsSchema, raw);
+    const claim = await this.jwt.verifyAsync<UploadTicket>(input.ticket).catch(() => null);
+    if (!claim || claim.purpose !== "upload" || claim.uid !== req.user.id || !claim.uploadId) {
+      throw new BadRequestException("The upload ticket is invalid or has expired");
+    }
+    const parts = await Promise.all(
+      input.partNumbers.map(async (partNumber) => ({
+        partNumber,
+        url: await this.storage.presignPart(claim.key, claim.uploadId!, partNumber),
+        headers: {} as Record<string, string>,
+      })),
+    );
+    return { parts };
   }
 
   /** Step 2: the object is checked (size and file signature) before it becomes a document; a bad file is deleted. */
   @Post("documents/uploads/complete")
   @RequirePermissions("documents.create")
   async completeUpload(@Body() raw: unknown, @Req() req: ReqUser) {
-    const { ticket } = parseBody(completeSchema, raw);
-    const claim = await this.jwt.verifyAsync<UploadTicket>(ticket).catch(() => null);
+    const input = parseBody(completeSchema, raw);
+    const claim = await this.jwt.verifyAsync<UploadTicket>(input.ticket).catch(() => null);
     if (!claim || claim.purpose !== "upload" || claim.uid !== req.user.id) throw new BadRequestException("The upload ticket is invalid or has expired");
     const existing = await this.prisma.documentVersion.findFirst({ where: { storageKey: claim.key }, select: { documentId: true } });
     if (existing) return this.prisma.document.findUniqueOrThrow({ where: { id: existing.documentId }, include: { versions: { omit: { storageKey: true } } } });
+    if (claim.uploadId) {
+      if (!input.parts?.length) throw new BadRequestException("Finish every upload part before completing");
+      try {
+        await this.storage.completeMultipart(claim.key, claim.uploadId, input.parts);
+      } catch (error) {
+        await this.storage.abortMultipart(claim.key, claim.uploadId);
+        throw error;
+      }
+    }
     const category = await this.prepareTarget(claim.target);
     const { size, head } = await this.storage.head(claim.key, HEAD_BYTES);
     let checked: Awaited<ReturnType<typeof inspectHead>>;
@@ -363,6 +432,7 @@ export class PlatformController {
       if (size !== claim.size) throw new BadRequestException("The uploaded file size does not match");
       checked = await inspectHead(head, claim.fileName, size, DOCUMENT_KINDS, this.maxBytesFor(category));
     } catch (error) {
+      if (claim.uploadId) await this.storage.abortMultipart(claim.key, claim.uploadId);
       await this.storage.remove(claim.key);
       throw error;
     }
@@ -536,6 +606,145 @@ export class PlatformController {
     });
   }
 
+  @Get("documents/folders")
+  @RequirePermissions("documents.view")
+  async folders(@Req() req: ReqUser, @Query() query: Record<string, string>) {
+    assertStaff(req.user);
+    const entityType = query.entityType ? String(query.entityType).slice(0, 40) : undefined;
+    const entityId = query.entityId ? String(query.entityId).slice(0, 64) : undefined;
+    const items = await this.prisma.documentFolder.findMany({
+      where: { entityType: entityType || null, entityId: entityId || null },
+      orderBy: [{ name: "asc" }],
+    });
+    return { items };
+  }
+
+  @Post("documents/folders")
+  @RequirePermissions("documents.create")
+  async createFolder(@Body() raw: unknown, @Req() req: ReqUser) {
+    assertStaff(req.user);
+    const input = parseBody(folderCreateSchema, raw);
+    const name = folderName(input.name);
+    await this.assertEntity(input.entityType, input.entityId);
+    if (input.parentId) await this.assertFolder(input.parentId, input.entityType, input.entityId);
+    const row = await this.prisma.documentFolder.create({
+      data: { name, parentId: input.parentId, entityType: input.entityType, entityId: input.entityId, createdById: req.user.id },
+    });
+    await this.audit.log({ actorId: req.user.id, action: "create", entityType: "document_folder", entityId: row.id, after: { name, parentId: input.parentId, entityType: input.entityType, entityId: input.entityId }, ip: String(req.ip || "") });
+    return row;
+  }
+
+  @Patch("documents/folders/:id")
+  @RequirePermissions("documents.create")
+  async updateFolder(@Param("id") id: string, @Body() raw: unknown, @Req() req: ReqUser) {
+    assertStaff(req.user);
+    const input = parseBody(folderUpdateSchema, raw);
+    const folder = await this.prisma.documentFolder.findUnique({ where: { id } });
+    if (!folder) throw new NotFoundException("Folder not found");
+    if (input.parentId) {
+      if (input.parentId === id) throw new BadRequestException("A folder cannot be moved inside itself");
+      await this.assertFolder(input.parentId, folder.entityType || undefined, folder.entityId || undefined);
+      const ancestors = await this.folderAncestors(input.parentId);
+      if (ancestors.includes(id)) throw new BadRequestException("A folder cannot be moved inside itself");
+    }
+    const row = await this.prisma.documentFolder.update({
+      where: { id },
+      data: {
+        name: input.name ? folderName(input.name) : undefined,
+        parentId: input.parentId === undefined ? undefined : input.parentId,
+      },
+    });
+    await this.audit.log({ actorId: req.user.id, action: "update", entityType: "document_folder", entityId: id, before: { name: folder.name, parentId: folder.parentId }, after: { name: row.name, parentId: row.parentId }, ip: String(req.ip || "") });
+    return row;
+  }
+
+  @Delete("documents/folders/:id")
+  @RequirePermissions("documents.create")
+  async deleteFolder(@Param("id") id: string, @Req() req: ReqUser) {
+    assertStaff(req.user);
+    const folder = await this.prisma.documentFolder.findUnique({ where: { id }, include: { _count: { select: { children: true, documents: true } } } });
+    if (!folder) throw new NotFoundException("Folder not found");
+    const live = await this.prisma.document.count({ where: { folderId: id, deletedAt: null } });
+    if (folder._count.children || live) throw new BadRequestException("Empty the folder before deleting it");
+    await this.prisma.$transaction(async (tx) => {
+      await tx.document.updateMany({ where: { folderId: id }, data: { folderId: null } });
+      await tx.documentFolder.delete({ where: { id } });
+      await this.audit.log({ actorId: req.user.id, action: "delete", entityType: "document_folder", entityId: id, before: { name: folder.name }, ip: String(req.ip || "") }, tx);
+    });
+    return { ok: true };
+  }
+
+  @Get("documents/:id")
+  @RequirePermissions("documents.view")
+  async document(@Param("id") id: string, @Req() req: ReqUser) {
+    const document = await this.visibleDocument(id, req.user);
+    const checkout = isExternal(req.user)
+      ? {}
+      : {
+          checkedOutById: document.checkedOutById,
+          checkedOutAt: document.checkedOutAt,
+          checkedOutBy: document.checkedOutById
+            ? await this.prisma.user.findUnique({ where: { id: document.checkedOutById }, select: { id: true, name: true } })
+            : null,
+        };
+    const folder = document.folderId ? await this.prisma.documentFolder.findUnique({ where: { id: document.folderId }, select: { id: true, name: true, parentId: true } }) : null;
+    const { versions, ...rest } = document;
+    return { ...rest, ...checkout, folder, versions: versions.map(({ storageKey: _key, ...version }) => version) };
+  }
+
+  @Post("documents/:id/move")
+  @RequirePermissions("documents.create")
+  async move(@Param("id") id: string, @Body() raw: unknown, @Req() req: ReqUser) {
+    assertStaff(req.user);
+    const input = parseBody(moveSchema, raw);
+    const document = await this.prisma.document.findFirst({ where: { id, deletedAt: null } });
+    if (!document) throw new NotFoundException("Document not found");
+    if (input.folderId) await this.assertFolder(input.folderId, document.entityType || undefined, document.entityId || undefined);
+    const row = await this.prisma.document.update({ where: { id }, data: { folderId: input.folderId } });
+    await this.audit.log({ actorId: req.user.id, action: "move", entityType: "document", entityId: id, before: { folderId: document.folderId }, after: { folderId: input.folderId }, ip: String(req.ip || "") });
+    return row;
+  }
+
+  @Post("documents/:id/checkout")
+  @RequirePermissions("documents.create")
+  async checkout(@Param("id") id: string, @Req() req: ReqUser) {
+    assertStaff(req.user);
+    const document = await this.prisma.document.findFirst({ where: { id, deletedAt: null }, select: { id: true, checkedOutById: true, checkedOutAt: true } });
+    if (!document) throw new NotFoundException("Document not found");
+    const error = checkoutError(document, req.user.id);
+    if (error) throw new ConflictException(error);
+    if (document.checkedOutById === req.user.id) return { ...document, alreadyCheckedOut: true };
+    const now = new Date();
+    const claimed = await this.prisma.document.updateMany({ where: { id, deletedAt: null, checkedOutById: null }, data: { checkedOutById: req.user.id, checkedOutAt: now } });
+    if (!claimed.count) throw new ConflictException("This file is already checked out");
+    await this.audit.log({ actorId: req.user.id, action: "checkout", entityType: "document", entityId: id, after: { checkedOutById: req.user.id, checkedOutAt: now }, ip: String(req.ip || "") });
+    return { id, checkedOutById: req.user.id, checkedOutAt: now };
+  }
+
+  @Post("documents/:id/checkin")
+  @RequirePermissions("documents.create")
+  async checkin(@Param("id") id: string, @Body() raw: unknown, @Req() req: ReqUser) {
+    assertStaff(req.user);
+    const input = parseBody(checkinSchema, raw ?? {});
+    const force = Boolean(input.force) && (can(req.user, "documents.approve") || req.user.roleKeys.some((role) => ELEVATED.has(role)));
+    if (input.force && !force) throw new ForbiddenException("You cannot force a check-in");
+    const document = await this.prisma.document.findFirst({ where: { id, deletedAt: null }, select: { id: true, checkedOutById: true, checkedOutAt: true } });
+    if (!document) throw new NotFoundException("Document not found");
+    const error = checkinError(document, req.user.id, force);
+    if (error) throw new ConflictException(error);
+    await this.prisma.document.update({ where: { id }, data: { checkedOutById: null, checkedOutAt: null } });
+    await this.audit.log({
+      actorId: req.user.id,
+      action: force && document.checkedOutById !== req.user.id ? "force_checkin" : "checkin",
+      entityType: "document",
+      entityId: id,
+      before: { checkedOutById: document.checkedOutById, checkedOutAt: document.checkedOutAt },
+      after: { checkedOutById: null },
+      ip: String(req.ip || ""),
+    });
+    return { id, checkedOutById: null, checkedOutAt: null };
+  }
+
   /** Scope + audience + (for portal users) only released revisions. Out-of-scope reads 404. */
   private async visibleDocument(id: string, user: AuthUser) {
     const external = isExternal(user);
@@ -568,14 +777,36 @@ export class PlatformController {
   }
 
   /** Validates where an upload goes and returns the category that decides its size limit. */
-  private async prepareTarget(target: { documentId?: string; entityType?: string; entityId?: string; category?: string }) {
+  private async prepareTarget(target: { documentId?: string; entityType?: string; entityId?: string; category?: string; folderId?: string }) {
     if (target.documentId) {
-      const document = await this.prisma.document.findFirst({ where: { id: target.documentId, deletedAt: null }, select: { category: true } });
+      const document = await this.prisma.document.findFirst({ where: { id: target.documentId, deletedAt: null }, select: { category: true, checkedOutById: true } });
       if (!document) throw new NotFoundException("Document not found");
       return document.category;
     }
     await this.assertEntity(target.entityType, target.entityId);
+    if (target.folderId) await this.assertFolder(target.folderId, target.entityType, target.entityId);
     return target.category || "OTHER";
+  }
+
+  private async assertFolder(folderId: string, entityType?: string, entityId?: string) {
+    const folder = await this.prisma.documentFolder.findUnique({ where: { id: folderId } });
+    if (!folder) throw new BadRequestException("Folder not found");
+    if ((folder.entityType || undefined) !== (entityType || undefined) || (folder.entityId || undefined) !== (entityId || undefined)) {
+      throw new BadRequestException("That folder does not belong to this project");
+    }
+    return folder;
+  }
+
+  private async folderAncestors(folderId: string) {
+    const ids: string[] = [];
+    let current: string | null = folderId;
+    for (let i = 0; i < 50 && current; i += 1) {
+      if (ids.includes(current)) throw new BadRequestException("A folder cannot be moved inside itself");
+      ids.push(current);
+      const row: { parentId: string | null } | null = await this.prisma.documentFolder.findUnique({ where: { id: current }, select: { parentId: true } });
+      current = row?.parentId || null;
+    }
+    return ids;
   }
 
   private maxBytesFor(category: string) {
@@ -589,13 +820,18 @@ export class PlatformController {
   /** Creates the document (version 1) or appends a new draft version to an existing one. */
   private async saveUpload(target: UploadTarget, file: StoredFile, req: ReqUser) {
     const ip = String(req.ip || "");
+    const sizeBytes = BigInt(file.sizeBytes);
     if (target.documentId) {
       const documentId = target.documentId;
+      const current = await this.prisma.document.findFirst({ where: { id: documentId, deletedAt: null }, select: { checkedOutById: true } });
+      if (!current) throw new NotFoundException("Document not found");
+      const locked = uploadLockError(current, req.user.id);
+      if (locked) throw new ConflictException(locked);
       return this.prisma.$transaction(async (tx) => {
         const latest = await tx.documentVersion.findFirst({ where: { documentId }, orderBy: { version: "desc" }, select: { version: true } });
         const version = (latest?.version || 0) + 1;
         const row = await tx.documentVersion.create({
-          data: { documentId, version, status: "DRAFT", fileName: file.fileName, mimeType: file.mimeType, sizeBytes: file.sizeBytes, storageKey: file.key, thumbnailKey: file.thumbnailKey, notes: target.notes, createdById: req.user.id },
+          data: { documentId, version, status: "DRAFT", fileName: file.fileName, mimeType: file.mimeType, sizeBytes, storageKey: file.key, thumbnailKey: file.thumbnailKey, notes: target.notes, createdById: req.user.id },
           omit: { storageKey: true },
         });
         await tx.document.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
@@ -610,10 +846,11 @@ export class PlatformController {
           category: target.category || "OTHER",
           entityType: target.entityType,
           entityId: target.entityId,
+          folderId: target.folderId,
           audiences: target.audiences,
           createdById: req.user.id,
           versions: {
-            create: { version: 1, status: "DRAFT", fileName: file.fileName, mimeType: file.mimeType, sizeBytes: file.sizeBytes, storageKey: file.key, thumbnailKey: file.thumbnailKey, notes: target.notes, createdById: req.user.id },
+            create: { version: 1, status: "DRAFT", fileName: file.fileName, mimeType: file.mimeType, sizeBytes, storageKey: file.key, thumbnailKey: file.thumbnailKey, notes: target.notes, createdById: req.user.id },
           },
         },
         include: { versions: { omit: { storageKey: true } } },

@@ -23,7 +23,7 @@ async function bootstrap() {
   app.setGlobalPrefix("api/v1");
   app.useGlobalFilters(new AllExceptionsFilter());
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-  const origins = [env.WEB_ORIGIN, env.PORTAL_ORIGIN, env.ERP_ORIGIN]
+  const origins = [env.WEB_ORIGIN, env.PORTAL_ORIGIN, env.ERP_ORIGIN, env.BIM_ORIGIN]
     .flatMap((value) => (value || "").split(","))
     .map((value) => value.trim())
     .filter(Boolean);

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from "@nestjs/common";
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { AbortMultipartUploadCommand, CompleteMultipartUploadCommand, CreateMultipartUploadCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client, UploadPartCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createReadStream, existsSync } from "fs";
 import { copyFile, mkdir, open, readFile, rm, stat, writeFile } from "fs/promises";
@@ -23,6 +23,9 @@ function isDecimal(value: unknown): value is { toNumber: () => number } {
 }
 
 export function toPlain<T>(value: T): T {
+  if (typeof value === "bigint") {
+    return (value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString()) as T;
+  }
   if (isDecimal(value)) return value.toNumber() as T;
   if (value instanceof Date) return value.toISOString() as T;
   if (Array.isArray(value)) return value.map((item) => toPlain(item)) as T;
@@ -293,6 +296,48 @@ export class StorageService {
     const client = this.s3();
     if (!client) return null;
     return getSignedUrl(client, new PutObjectCommand({ Bucket: process.env.S3_BUCKET, Key: key, ContentType: mimeType, ContentLength: size }), { expiresIn });
+  }
+
+  async createMultipart(key: string, mimeType: string) {
+    assertStorageKey(key);
+    const client = this.s3();
+    if (!client) return null;
+    const result = await client.send(new CreateMultipartUploadCommand({ Bucket: process.env.S3_BUCKET, Key: key, ContentType: mimeType }));
+    if (!result.UploadId) throw new InternalServerErrorException("Object storage did not start a multipart upload");
+    return result.UploadId;
+  }
+
+  async presignPart(key: string, uploadId: string, partNumber: number, expiresIn = 3600) {
+    assertStorageKey(key);
+    const client = this.s3();
+    if (!client) throw new InternalServerErrorException("Object storage is not configured");
+    return getSignedUrl(client, new UploadPartCommand({ Bucket: process.env.S3_BUCKET, Key: key, UploadId: uploadId, PartNumber: partNumber }), { expiresIn });
+  }
+
+  async completeMultipart(key: string, uploadId: string, parts: Array<{ partNumber: number; etag: string }>) {
+    assertStorageKey(key);
+    const client = this.s3();
+    if (!client) throw new InternalServerErrorException("Object storage is not configured");
+    await client.send(
+      new CompleteMultipartUploadCommand({
+        Bucket: process.env.S3_BUCKET,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: {
+          Parts: parts
+            .slice()
+            .sort((a, b) => a.partNumber - b.partNumber)
+            .map((part) => ({ PartNumber: part.partNumber, ETag: part.etag })),
+        },
+      }),
+    );
+  }
+
+  async abortMultipart(key: string, uploadId: string) {
+    assertStorageKey(key);
+    const client = this.s3();
+    if (!client) return;
+    await client.send(new AbortMultipartUploadCommand({ Bucket: process.env.S3_BUCKET, Key: key, UploadId: uploadId })).catch(() => undefined);
   }
 
   private missing(key: string, error: unknown) {

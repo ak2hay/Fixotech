@@ -47,6 +47,7 @@ model User {
   assignedIssues SiteIssue[] @relation("IssueAssignee")
   assignedTickets ServiceTicket[] @relation("TicketAssignee")
   stockMovements InventoryTransaction[] @relation("InventoryActor")
+  checkedOutDocuments Document[] @relation("DocumentCheckout")
   @@index([customerId])
 }
 
@@ -336,24 +337,47 @@ model ApprovalRequest {
   @@index([status])
 }
 
-model Document {
+model DocumentFolder {
   id          String   @id @default(cuid())
-  title       String
-  category    String
+  name        String
+  parentId    String?
+  parent      DocumentFolder?  @relation("FolderTree", fields: [parentId], references: [id])
+  children    DocumentFolder[] @relation("FolderTree")
   entityType  String?
   entityId    String?
-  audiences   String[] @default([])
-  expiresAt   DateTime?
   createdById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  documents   Document[]
+  @@index([entityType, entityId])
+  @@index([parentId])
+}
+
+model Document {
+  id             String   @id @default(cuid())
+  title          String
+  category       String
+  entityType     String?
+  entityId       String?
+  folderId       String?
+  folder         DocumentFolder? @relation(fields: [folderId], references: [id])
+  audiences      String[] @default([])
+  expiresAt      DateTime?
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
   /// Soft delete: archived documents stay as evidence but are hidden from every listing and download.
-  deletedAt   DateTime?
-  versions    DocumentVersion[]
-  shares      DocumentShare[]
-  downloads   DocumentDownload[]
+  deletedAt      DateTime?
+  checkedOutById String?
+  checkedOutBy   User?     @relation("DocumentCheckout", fields: [checkedOutById], references: [id])
+  checkedOutAt   DateTime?
+  versions       DocumentVersion[]
+  shares         DocumentShare[]
+  downloads      DocumentDownload[]
   @@index([entityType, entityId])
   @@index([category])
+  @@index([folderId])
+  @@index([checkedOutById])
 }
 
 /// One row per file served (ERP, portal, public website, share link or zip bundle) for download analytics.
@@ -380,7 +404,7 @@ model DocumentVersion {
   status      String   @default("DRAFT")
   fileName    String
   mimeType    String
-  sizeBytes   Int
+  sizeBytes   BigInt
   storageKey  String
   thumbnailKey String?
   notes       String?

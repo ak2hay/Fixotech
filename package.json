@@ -3,9 +3,9 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "dev": "pnpm --parallel --filter @fixotec/api --filter @fixotec/web --filter @fixotec/portal --filter @fixotec/erp dev",
-    "build": "pnpm --filter @fixotec/shared build && pnpm --filter @fixotec/db build && pnpm --filter @fixotec/api build && pnpm --filter @fixotec/web build && pnpm --filter @fixotec/portal build && pnpm --filter @fixotec/erp build",
-    "typecheck": "pnpm --filter @fixotec/shared typecheck && pnpm --filter @fixotec/db typecheck && pnpm --filter @fixotec/api typecheck && pnpm --filter @fixotec/ui typecheck && pnpm --filter @fixotec/web typecheck && pnpm --filter @fixotec/portal typecheck && pnpm --filter @fixotec/erp typecheck",
+    "dev": "pnpm --parallel --filter @fixotec/api --filter @fixotec/web --filter @fixotec/portal --filter @fixotec/erp --filter @fixotec/bim dev",
+    "build": "pnpm --filter @fixotec/shared build && pnpm --filter @fixotec/db build && pnpm --filter @fixotec/api build && pnpm --filter @fixotec/web build && pnpm --filter @fixotec/portal build && pnpm --filter @fixotec/erp build && pnpm --filter @fixotec/bim build",
+    "typecheck": "pnpm --filter @fixotec/shared typecheck && pnpm --filter @fixotec/db typecheck && pnpm --filter @fixotec/api typecheck && pnpm --filter @fixotec/ui typecheck && pnpm --filter @fixotec/web typecheck && pnpm --filter @fixotec/portal typecheck && pnpm --filter @fixotec/erp typecheck && pnpm --filter @fixotec/bim typecheck",
     "lint": "eslint .",
     "audit:coverage": "node scripts/audit-coverage.mjs",
     "test": "vitest run",

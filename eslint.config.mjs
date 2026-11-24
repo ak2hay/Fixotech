@@ -6,6 +6,7 @@ const nextAppFiles = [
   "apps/web/**/*.{js,jsx,ts,tsx}",
   "apps/portal/**/*.{js,jsx,ts,tsx}",
   "apps/erp/**/*.{js,jsx,ts,tsx}",
+  "apps/bim/**/*.{js,jsx,ts,tsx}",
 ];
 
 export default tseslint.config(

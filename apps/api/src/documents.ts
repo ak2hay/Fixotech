@@ -31,7 +31,7 @@ export function recordDownload(db: PrismaService | Tx, input: { documentId: stri
     .catch(() => undefined);
 }
 
-type BundleFile = { documentId: string; version: number; category: string; fileName: string; storageKey: string; sizeBytes: number };
+type BundleFile = { documentId: string; version: number; category: string; fileName: string; storageKey: string; sizeBytes: number | bigint };
 
 /** Unique entry names inside the zip: CATEGORY/file.ext, with a counter when two files share a name. */
 export function bundleEntryNames(files: Array<{ category: string; fileName: string }>) {
@@ -52,7 +52,7 @@ export function bundleEntryNames(files: Array<{ category: string; fileName: stri
 export async function streamBundle(res: Response, storage: StorageService, files: BundleFile[], zipName: string) {
   if (!files.length) throw new BadRequestException("There are no files to bundle");
   if (files.length > BUNDLE_MAX_FILES) throw new BadRequestException(`A bundle can hold at most ${BUNDLE_MAX_FILES} files`);
-  if (files.reduce((sum, file) => sum + file.sizeBytes, 0) > BUNDLE_MAX_BYTES) throw new BadRequestException("These files are too large to bundle; download them one by one");
+  if (files.reduce((sum, file) => sum + Number(file.sizeBytes), 0) > BUNDLE_MAX_BYTES) throw new BadRequestException("These files are too large to bundle; download them one by one");
   res.setHeader("Content-Type", "application/zip");
   res.setHeader("Content-Disposition", contentDisposition(zipName, "attachment"));
   res.setHeader("X-Content-Type-Options", "nosniff");

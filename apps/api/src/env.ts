@@ -43,6 +43,7 @@ const schema = z
     WEB_ORIGIN: optionalText,
     PORTAL_ORIGIN: optionalText,
     ERP_ORIGIN: optionalText,
+    BIM_ORIGIN: optionalText,
     API_PUBLIC_URL: optionalUrl,
     STORAGE_DRIVER: z.enum(["local", "s3"]).default("local"),
     STORAGE_ROOT: optionalText,
