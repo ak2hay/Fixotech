@@ -46,7 +46,7 @@ export function BimShell({ children }: { children: React.ReactNode }) {
           <div className="rounded-lg bg-sidebar px-4 py-3">
             <Logo subtitle={null} />
           </div>
-          <span className="text-xs">Opening the BIM library...</span>
+          <span className="text-xs">Opening the Revit Library...</span>
         </div>
       </div>
     );

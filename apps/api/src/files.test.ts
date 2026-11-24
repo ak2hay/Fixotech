@@ -1,3 +1,5 @@
+import { ConflictException } from "@nestjs/common";
+import { assertUniqueFolderName } from "./library";
 import { describe, expect, it } from "vitest";
 import {
   MULTIPART_PART_BYTES,
@@ -10,6 +12,7 @@ import {
   releasedVersionSome,
   releasedVersions,
   uploadLockError,
+  normalizedFolderName,
 } from "./files";
 import { toPlain } from "./services";
 
@@ -73,3 +76,31 @@ describe("size serialization", () => {
     expect(huge).toEqual({ sizeBytes: (2n ** 53n + 3n).toString() });
   });
 });
+
+describe("folder uniqueness", () => {
+  it("treats names as unique after trim and case folding", () => {
+    expect(normalizedFolderName("  Revit Families  ")).toBe("revit families");
+    expect(normalizedFolderName("MICRON")).toBe(normalizedFolderName("micron"));
+  });
+
+  it("rejects a duplicate name under the same parent", async () => {
+    const folders = {
+      findMany: async () => [{ id: "1", name: "Reliance", parentId: null, entityType: null, entityId: null }],
+    };
+    await expect(assertUniqueFolderName(folders, { name: " reliance " })).rejects.toBeInstanceOf(ConflictException);
+    await expect(assertUniqueFolderName(folders, { name: "RELIANCE" })).rejects.toMatchObject({ message: expect.stringMatching(/already exists/i) });
+  });
+
+  it("allows the same name under a different parent or when renaming the same row", async () => {
+    const folders = {
+      findMany: async (args: { where?: { parentId?: string | null; id?: { not?: string } } }) => {
+        if (args.where?.parentId) return [];
+        if (args.where?.id?.not === "1") return [];
+        return [{ id: "1", name: "Reliance", parentId: null, entityType: null, entityId: null }];
+      },
+    };
+    await expect(assertUniqueFolderName(folders, { name: "Reliance", parentId: "other" })).resolves.toBe("Reliance");
+    await expect(assertUniqueFolderName(folders, { name: "Reliance", excludeId: "1" })).resolves.toBe("Reliance");
+  });
+});
+

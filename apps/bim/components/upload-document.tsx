@@ -1,13 +1,16 @@
 "use client";
 
-import { Button, ErrorNote, Field, Modal, Select, TextInput, humanize } from "@fixotec/ui";
+import { Button, ErrorNote, Field, Modal, Select, TextInput } from "@fixotec/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
+import { useApi } from "../lib/query";
 import { uploadDocument } from "../lib/upload";
 
 const CATEGORIES = ["BIM", "CAD", "DRAWING", "OTHER"];
-const INVALIDATE = ["/documents", "/cad", "/projects"];
+const INVALIDATE = ["/documents", "/cad", "/projects", "/products"];
 const ACCEPT = ".pdf,.png,.jpg,.jpeg,.webp,.gif,.zip,.xlsx,.docx,.csv,.txt,.dwg,.dxf,.dwf,.dwfx,.rvt,.rfa,.rte,.rft,.ifc,.step,.stp,.igs,.iges,.sat,.skp,.nwd,.nwc";
+
+type Product = { id: string; name: string; sku: string; category?: { name: string } | null };
 
 export function UploadDocument({
   open,
@@ -27,8 +30,10 @@ export function UploadDocument({
   defaultCategory?: string;
 }) {
   const client = useQueryClient();
+  const products = useApi<{ items: Product[] }>(open && !documentId ? "/products?pageSize=100" : null);
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [productId, setProductId] = useState(entityType === "product" ? entityId || "" : "");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -40,9 +45,18 @@ export function UploadDocument({
     setError(null);
     setProgress(0);
     try {
+      const linked = productId || undefined;
       await uploadDocument(
         file,
-        { title: text("title"), category: text("category"), audiences: text("audiences"), notes: text("notes"), entityType, entityId, folderId, documentId },
+        {
+          title: text("title"),
+          category: text("category"),
+          notes: text("notes"),
+          entityType: documentId ? entityType : linked ? "product" : entityType,
+          entityId: documentId ? entityId : linked || entityId,
+          folderId,
+          documentId,
+        },
         setProgress,
       );
       await client.invalidateQueries({ predicate: (query) => INVALIDATE.some((prefix) => String(query.queryKey[0] || "").startsWith(prefix)) });
@@ -58,8 +72,8 @@ export function UploadDocument({
     <Modal
       open={open}
       onOpenChange={(next) => progress === null && onOpenChange(next)}
-      title={documentId ? "Upload a new version" : "Upload file"}
-      description="Revit files (.rvt, .rfa) are stored for download. Upload an .ifc alongside or as a new version to preview the model in the browser. Large files go straight to object storage."
+      title={documentId ? "Upload a new version" : "Upload family"}
+      description="Revit files (.rvt, .rfa) are stored for download. A preview thumbnail is taken from the file when possible. Upload an .ifc as a later version to preview the model in 3D."
       footer={
         <>
           <Button variant="outline" disabled={progress !== null} onClick={() => onOpenChange(false)}>Cancel</Button>
@@ -74,11 +88,18 @@ export function UploadDocument({
             <Field label="Title"><TextInput name="title" placeholder="Defaults to the file name" /></Field>
             <Field label="Category">
               <Select name="category" defaultValue={defaultCategory}>
-                {CATEGORIES.map((value) => <option key={value} value={value}>{humanize(value)}</option>)}
+                {CATEGORIES.map((value) => <option key={value} value={value}>{value}</option>)}
               </Select>
             </Field>
-            <Field label="Share with" hint="Comma-separated audiences, e.g. CUSTOMER,CONSULTANT. Approved revisions can then be shared with the partner portal.">
-              <TextInput name="audiences" defaultValue="CUSTOMER,CONSULTANT" />
+            <Field label="Fixotec product" hint="Optional. Links this family to a catalogue product for breadcrumbs and filters.">
+              <Select value={productId} onChange={(event) => setProductId(event.target.value)}>
+                <option value="">Not linked</option>
+                {(products.data?.items || []).map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {product.sku} · {product.name}{product.category?.name ? ` (${product.category.name})` : ""}
+                  </option>
+                ))}
+              </Select>
             </Field>
           </>
         )}

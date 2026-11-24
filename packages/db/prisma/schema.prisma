@@ -48,6 +48,8 @@ model User {
   assignedTickets ServiceTicket[] @relation("TicketAssignee")
   stockMovements InventoryTransaction[] @relation("InventoryActor")
   checkedOutDocuments Document[] @relation("DocumentCheckout")
+  createdDocuments Document[] @relation("DocumentCreated")
+  createdDocumentVersions DocumentVersion[] @relation("DocumentVersionCreated")
   @@index([customerId])
 }
 
@@ -364,6 +366,7 @@ model Document {
   audiences      String[] @default([])
   expiresAt      DateTime?
   createdById    String?
+  createdBy      User?     @relation("DocumentCreated", fields: [createdById], references: [id])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   /// Soft delete: archived documents stay as evidence but are hidden from every listing and download.
@@ -407,8 +410,11 @@ model DocumentVersion {
   sizeBytes   BigInt
   storageKey  String
   thumbnailKey String?
+  /// Revit year/build and other extracted source metadata.
+  sourceInfo   Json?
   notes       String?
   createdById String?
+  createdBy   User?    @relation("DocumentVersionCreated", fields: [createdById], references: [id])
   createdAt   DateTime @default(now())
   @@unique([documentId, version])
 }

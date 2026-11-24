@@ -1,8 +1,11 @@
-import { FolderOpen } from "lucide-react";
+import { FolderOpen, LayoutGrid } from "lucide-react";
 
 export const NAV = [
   {
     label: "Library",
-    items: [{ href: "/", label: "Project files", icon: FolderOpen, permission: "documents.view" }],
+    items: [
+      { href: "/", label: "Dashboard", icon: LayoutGrid, permission: "documents.view" },
+      { href: "/library", label: "Revit Library", icon: FolderOpen, permission: "documents.view" },
+    ],
   },
 ];

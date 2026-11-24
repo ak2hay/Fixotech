@@ -1,173 +1,151 @@
 "use client";
 
-import { Button, Card, DataTable, FilterButton, Page, PageHeader, StatusPill, TextInput, humanize, relativeTime } from "@fixotec/ui";
-import { Folder, FolderPlus, Lock, Plus, Search } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { Button, Page, PageHeader, Select, TextInput } from "@fixotec/ui";
+import { Search, SlidersHorizontal } from "lucide-react";
 import { useMemo, useState } from "react";
-import { QueryError, fileSize } from "../../components/common";
-import { UploadDocument } from "../../components/upload-document";
-import { api } from "../../lib/api";
-import { useApi, type Paged } from "../../lib/query";
-import { allowed, useSession } from "../../lib/session";
+import { QueryError } from "../../components/common";
+import { EmptyLibrary, FamilyList, FamilyTiles, ViewToggle, type FamilyDoc } from "../../components/family-views";
+import { useApi } from "../../lib/query";
+import { useLibraryView } from "../../lib/view-mode";
 
-type Project = { id: string; code: string; name: string };
 type FolderRow = { id: string; name: string; parentId: string | null };
-type Version = { version: number; status: string; fileName: string; sizeBytes?: number | string; mimeType?: string };
-type Doc = {
-  id: string;
-  title: string;
-  category: string;
-  folderId?: string | null;
-  updatedAt: string;
-  versions: Version[];
-  checkedOutById?: string | null;
-  checkedOutBy?: { id: string; name: string } | null;
-  checkedOutAt?: string | null;
-};
+type ProductRow = { id: string; name: string; sku: string; category?: { id: string; name: string } | null; family?: { name: string } | null };
 
-function isIfc(fileName?: string) {
-  return (fileName || "").toLowerCase().endsWith(".ifc");
-}
-
-export default function LibraryPage() {
-  const router = useRouter();
-  const queryClient = useQueryClient();
-  const { session } = useSession();
-  const [projectId, setProjectId] = useState("");
-  const [folderId, setFolderId] = useState("");
+export default function DashboardPage() {
+  const { view, setView } = useLibraryView();
   const [q, setQ] = useState("");
-  const [uploading, setUploading] = useState(false);
-  const [folderOpen, setFolderOpen] = useState(false);
-  const [folderName, setFolderName] = useState("");
-  const [folderError, setFolderError] = useState("");
-  const projects = useApi<Paged<Project>>("/projects?pageSize=100");
-  const folderQuery = projectId ? `/documents/folders?entityType=project&entityId=${projectId}` : "/documents/folders";
-  const folders = useApi<{ items: FolderRow[] }>(folderQuery);
-  const params = new URLSearchParams();
-  if (projectId) {
-    params.set("entityType", "project");
-    params.set("entityId", projectId);
-  }
-  if (folderId) params.set("folderId", folderId);
+  const [folderId, setFolderId] = useState("");
+  const [status, setStatus] = useState<"PUBLIC" | "DRAFT" | "">("");
+  const [showDrafts, setShowDrafts] = useState(false);
+  const [categoryId, setCategoryId] = useState("");
+  const [uploaderId, setUploaderId] = useState("");
+  const [sort, setSort] = useState("updatedAt");
+  const folders = useApi<{ items: FolderRow[] }>("/documents/folders");
+  const products = useApi<{ items: ProductRow[] }>("/products?pageSize=100");
+  const params = new URLSearchParams({ kind: "library" });
   if (q) params.set("q", q);
-  const docs = useApi<{ items: Doc[] }>(`/documents?${params}`, { keepPrevious: true });
-  const canCreate = allowed(session, "documents.create");
+  if (folderId) params.set("folderId", folderId);
+  const effectiveStatus = status || (showDrafts ? "" : "PUBLIC");
+  if (effectiveStatus) params.set("status", effectiveStatus);
+  if (uploaderId) params.set("createdById", uploaderId);
+  if (sort) params.set("sort", sort);
+  const docs = useApi<{ items: FamilyDoc[] }>(`/documents?${params}`, { keepPrevious: true });
 
-  const tree = useMemo(() => {
-    const items = folders.data?.items || [];
-    const byParent = new Map<string, FolderRow[]>();
-    for (const folder of items) {
-      const key = folder.parentId || "";
-      byParent.set(key, [...(byParent.get(key) || []), folder]);
-    }
-    for (const list of byParent.values()) list.sort((a, b) => a.name.localeCompare(b.name));
-    const rows: Array<FolderRow & { depth: number }> = [];
-    const walk = (parent: string, depth: number) => {
-      for (const folder of byParent.get(parent) || []) {
-        rows.push({ ...folder, depth });
-        walk(folder.id, depth + 1);
-      }
-    };
-    walk("", 0);
-    return rows;
-  }, [folders.data]);
+  const items = useMemo(() => {
+    const rows = docs.data?.items || [];
+    if (!categoryId) return rows;
+    return rows.filter((row) => row.product?.category && (row.product as { category?: { id?: string } }).category?.id === categoryId);
+  }, [docs.data, categoryId]);
 
-  async function createFolder() {
-    setFolderError("");
-    try {
-      const row = await api<FolderRow>("/documents/folders", {
-        method: "POST",
-        body: JSON.stringify({ name: folderName, parentId: folderId && folderId !== "root" ? folderId : undefined, entityType: projectId ? "project" : undefined, entityId: projectId || undefined }),
-      });
-      setFolderName("");
-      setFolderOpen(false);
-      setFolderId(row.id);
-      await queryClient.invalidateQueries({ predicate: (query) => String(query.queryKey[0] || "").startsWith("/documents") });
-    } catch (error) {
-      setFolderError((error as Error).message);
+  const uploaders = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const row of docs.data?.items || []) {
+      if (row.createdBy?.id) map.set(row.createdBy.id, row.createdBy.name);
     }
-  }
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [docs.data]);
+
+  const categories = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products.data?.items || []) {
+      if (product.category?.id) map.set(product.category.id, product.category.name);
+    }
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [products.data]);
 
   return (
     <Page>
       <PageHeader
-        title="Project files"
-        description="Revit, IFC and CAD files in project folders. Native Revit stays download-only; upload an IFC to preview it in 3D."
-        actions={
-          canCreate ? (
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setFolderOpen(true)}><FolderPlus /> New folder</Button>
-              <Button onClick={() => setUploading(true)}><Plus /> Upload file</Button>
-            </div>
-          ) : null
-        }
+        title="Revit Library"
+        description="Every Revit family across folders, with previews, versions, and Fixotec product links."
+        actions={<ViewToggle view={view} onChange={setView} />}
       />
-      <div className="grid gap-4 lg:grid-cols-[16rem_1fr]">
-        <Card className="h-fit">
-          <div className="border-b border-line px-3 py-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted">Folders</p>
-          </div>
-          <nav className="p-2">
-            <button type="button" className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${!folderId ? "bg-sidebar text-white" : "hover:bg-canvas"}`} onClick={() => setFolderId("")}>
-              <Folder className="h-4 w-4" /> All files
-            </button>
-            <button type="button" className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${folderId === "root" ? "bg-sidebar text-white" : "hover:bg-canvas"}`} onClick={() => setFolderId("root")}>
-              <Folder className="h-4 w-4" /> Unfiled
-            </button>
-            {tree.map((folder) => (
-              <button key={folder.id} type="button" style={{ paddingLeft: 8 + folder.depth * 12 }} className={`flex w-full items-center gap-2 rounded-md py-1.5 pr-2 text-left text-sm ${folderId === folder.id ? "bg-sidebar text-white" : "hover:bg-canvas"}`} onClick={() => setFolderId(folder.id)}>
-                <Folder className="h-4 w-4 shrink-0" />
-                <span className="truncate">{folder.name}</span>
-              </button>
-            ))}
-          </nav>
-        </Card>
-        <Card>
-          <div className="flex flex-wrap items-center gap-2 border-b border-line px-4 py-3">
-            <TextInput icon={<Search />} placeholder="Search file titles..." value={q} onChange={(event) => setQ(event.target.value)} className="w-64" />
-            <FilterButton label="Project" value={projectId} onChange={(value) => { setProjectId(value); setFolderId(""); }} options={(projects.data?.items || []).map((item) => ({ value: item.id, label: `${item.code} · ${item.name}` }))} />
-          </div>
-          <QueryError error={docs.error || folders.error} />
-          <DataTable
-            rows={docs.data?.items || []}
-            loading={docs.isLoading}
-            rowKey={(row) => row.id}
-            empty="No files in this folder yet."
-            onRowClick={(row) => router.push(`/files/${row.id}`)}
-            columns={[
-              { key: "title", header: "File", sortValue: (row) => row.title, render: (row) => (
-                <div>
-                  <p className="font-medium">{row.title}</p>
-                  <p className="text-2xs text-muted">{row.versions[0]?.fileName}</p>
-                </div>
-              ) },
-              { key: "category", header: "Type", render: (row) => humanize(row.category) },
-              { key: "version", header: "Rev", align: "right", render: (row) => row.versions[0]?.version || "—" },
-              { key: "status", header: "Status", render: (row) => (row.versions[0]?.status ? <StatusPill status={row.versions[0].status} /> : "—") },
-              { key: "size", header: "Size", align: "right", render: (row) => (row.versions[0]?.sizeBytes ? fileSize(row.versions[0].sizeBytes) : "—") },
-              { key: "lock", header: "Lock", render: (row) => (row.checkedOutBy ? <span className="inline-flex items-center gap-1 text-xs text-muted"><Lock className="h-3 w-3" />{row.checkedOutBy.name}</span> : "—") },
-              { key: "preview", header: "3D", render: (row) => (row.versions.some((version) => isIfc(version.fileName)) ? "IFC" : "—") },
-              { key: "updatedAt", header: "Updated", sortValue: (row) => row.updatedAt, render: (row) => <span className="text-muted">{relativeTime(row.updatedAt)}</span> },
-            ]}
+      <div className="rounded-2xl border border-line bg-white p-4 shadow-sm">
+        <label className="flex items-center gap-3 rounded-xl border border-line bg-canvas px-3 py-2">
+          <Search className="h-5 w-5 shrink-0 text-muted" />
+          <TextInput
+            value={q}
+            onChange={(event) => setQ(event.target.value)}
+            placeholder="Search by name, folder, or notes"
+            className="border-0 bg-transparent shadow-none focus-visible:ring-0"
           />
-        </Card>
-      </div>
-      <UploadDocument open={uploading} onOpenChange={setUploading} entityType={projectId ? "project" : undefined} entityId={projectId || undefined} folderId={folderId && folderId !== "root" ? folderId : undefined} defaultCategory="BIM" />
-      {folderOpen ? (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-xl border border-line bg-surface p-5 shadow-pop">
-            <h2 className="text-base font-semibold">New folder</h2>
-            <p className="mt-1 text-sm text-muted">{projectId ? "Created in the selected project." : "Created in the unassigned library."}</p>
-            <TextInput className="mt-4" value={folderName} onChange={(event) => setFolderName(event.target.value)} placeholder="Folder name" />
-            {folderError ? <p className="mt-2 text-sm text-accent">{folderError}</p> : null}
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setFolderOpen(false)}>Cancel</Button>
-              <Button disabled={!folderName.trim()} onClick={() => void createFolder()}>Create</Button>
-            </div>
-          </div>
+        </label>
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <SlidersHorizontal className="mb-2 hidden h-4 w-4 text-muted sm:block" />
+          <label className="grid gap-1 text-xs font-medium text-muted">
+            Folder
+            <Select value={folderId} onChange={(event) => setFolderId(event.target.value)} className="min-w-40">
+              <option value="">All folders</option>
+              {(folders.data?.items || []).map((folder) => (
+                <option key={folder.id} value={folder.id}>{folder.name}</option>
+              ))}
+            </Select>
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-muted">
+            Status
+            <Select
+              value={status}
+              onChange={(event) => {
+                const next = event.target.value as "" | "PUBLIC" | "DRAFT";
+                setStatus(next);
+                if (next === "DRAFT") setShowDrafts(true);
+              }}
+              className="min-w-36"
+            >
+              <option value="">{showDrafts ? "Public and Draft" : "Public (default)"}</option>
+              <option value="PUBLIC">Public</option>
+              <option value="DRAFT">Draft</option>
+            </Select>
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-muted">
+            Category
+            <Select value={categoryId} onChange={(event) => setCategoryId(event.target.value)} className="min-w-40">
+              <option value="">All categories</option>
+              {categories.map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </Select>
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-muted">
+            Uploader
+            <Select value={uploaderId} onChange={(event) => setUploaderId(event.target.value)} className="min-w-40">
+              <option value="">Anyone</option>
+              {uploaders.map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </Select>
+          </label>
+          <label className="grid gap-1 text-xs font-medium text-muted">
+            Sort
+            <Select value={sort} onChange={(event) => setSort(event.target.value)} className="min-w-36">
+              <option value="updatedAt">Last updated</option>
+              <option value="title">Name</option>
+              <option value="createdAt">Date uploaded</option>
+            </Select>
+          </label>
+          <label className="mb-2 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={showDrafts}
+              onChange={(event) => {
+                setShowDrafts(event.target.checked);
+                if (!event.target.checked && status === "DRAFT") setStatus("");
+              }}
+            />
+            Show drafts
+          </label>
         </div>
+      </div>
+      <QueryError error={docs.error} />
+      {!docs.data && !docs.error ? <p className="text-sm text-muted">Loading families…</p> : null}
+      {docs.data && items.length === 0 ? (
+        <EmptyLibrary
+          title={showDrafts || status === "DRAFT" ? "No families match these filters" : "No public families yet"}
+          body={showDrafts ? "Try a different search or folder." : "Turn on Show drafts to see work in progress, or open the Revit Library to upload a family."}
+          action={!showDrafts ? <Button variant="outline" onClick={() => setShowDrafts(true)}>Show drafts</Button> : undefined}
+        />
       ) : null}
+      {view === "tiles" ? <FamilyTiles items={items} /> : <FamilyList items={items} />}
     </Page>
   );
 }

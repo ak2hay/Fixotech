@@ -67,3 +67,13 @@ export function folderName(value: string) {
   }
   return name;
 }
+
+export function normalizedFolderName(name: string) {
+  return name.trim().toLowerCase();
+}
+
+export const BIM_VERSION_STATUSES = ["DRAFT", "PUBLIC"] as const;
+
+export function isBimLibraryStatus(status: string) {
+  return status === "DRAFT" || status === "PUBLIC";
+}

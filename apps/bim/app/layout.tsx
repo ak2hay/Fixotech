@@ -5,7 +5,12 @@ import "./globals.css";
 const sans = Inter({ subsets: ["latin"], variable: "--font-sans" });
 const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-mono" });
 
-export const metadata: Metadata = { title: "Fixotec BIM", description: "Employee portal for Revit, IFC and CAD files", icons: { icon: "/icon.svg" }, robots: { index: false, follow: false } };
+export const metadata: Metadata = {
+  title: "Fixotec Revit Library",
+  description: "Internal Revit family library for Fixotec staff",
+  icons: { icon: "/icon.svg" },
+  robots: { index: false, follow: false },
+};
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

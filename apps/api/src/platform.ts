@@ -28,7 +28,9 @@ import { z } from "zod";
 import { approvalRuleSchema, matchesCondition } from "@fixotec/shared";
 import { recordDownload, streamBundle, streamFile } from "./documents";
 import { env } from "./env";
-import { checkinError, checkoutError, folderName, MULTIPART_THRESHOLD_BYTES, multipartPlan, uploadLockError } from "./files";
+import { checkinError, checkoutError, folderName, isBimLibraryStatus, MULTIPART_THRESHOLD_BYTES, multipartPlan, uploadLockError } from "./files";
+import { attachRevitPreview, assertUniqueFolderName, isLibraryModelName, latestVersion } from "./library";
+import { isRevitFamilyFile } from "./revit-preview";
 import { AuthUser, Public, RequirePermissions, assertCan, assertStaff, can, clientIp, isExternal, pageOf, parseBody } from "./http";
 import { PrismaService } from "./prisma.service";
 import { documentAudience, documentScope } from "./scope";
@@ -106,7 +108,7 @@ const bundleSchema = z.object({
 type UploadTarget = z.infer<typeof targetUploadSchema>;
 type StoredFile = { key: string; fileName: string; mimeType: string; sizeBytes: number; thumbnailKey: string | null };
 type UploadTicket = { purpose: "upload"; uid: string; key: string; size: number; fileName: string; target: UploadTarget; uploadId?: string; mode?: "s3" | "s3-multipart" };
-const versionStatusSchema = z.object({ status: z.enum(["DRAFT", "INTERNAL_REVIEW", "CLIENT_REVIEW", "APPROVED"]).default("APPROVED") }).strict();
+const versionStatusSchema = z.object({ status: z.enum(["DRAFT", "PUBLIC", "INTERNAL_REVIEW", "CLIENT_REVIEW", "APPROVED"]).default("APPROVED") }).strict();
 const shareSchema = z.object({ version: z.coerce.number().int().min(1).optional(), days: z.coerce.number().int().min(1).max(30).default(7) }).strict();
 const decisionSchema = z.object({ decision: z.enum(["APPROVED", "REJECTED"]), note: z.string().trim().max(2000).optional() }).strict();
 
@@ -300,26 +302,48 @@ export class PlatformController {
   async documents(@Req() req: ReqUser, @Query() query: Record<string, string>) {
     const external = isExternal(req.user);
     const audience = documentAudience(req.user);
+    const q = query.q ? String(query.q).slice(0, 100) : "";
     const items = await this.prisma.document.findMany({
       where: {
         AND: [await documentScope(this.prisma, req.user)],
         entityType: query.entityType ? String(query.entityType).slice(0, 40) : undefined,
         entityId: query.entityId ? String(query.entityId).slice(0, 64) : undefined,
         category: query.category ? String(query.category).slice(0, 40) : undefined,
+        createdById: query.createdById ? String(query.createdById).slice(0, 64) : undefined,
         audiences: audience.length ? { hasSome: audience } : undefined,
-        title: query.q ? { contains: String(query.q).slice(0, 100), mode: "insensitive" } : undefined,
+        OR: q
+          ? [
+              { title: { contains: q, mode: "insensitive" } },
+              { folder: { is: { name: { contains: q, mode: "insensitive" } } } },
+              { versions: { some: { notes: { contains: q, mode: "insensitive" } } } },
+            ]
+          : undefined,
         folderId: query.folderId === "root" ? null : query.folderId || undefined,
         versions: external ? { some: { status: { in: PORTAL_VERSION_STATUSES } } } : undefined,
       },
       include: {
         versions: { where: external ? { status: { in: PORTAL_VERSION_STATUSES } } : undefined, orderBy: { version: "desc" }, omit: { storageKey: true } },
         checkedOutBy: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true } },
         folder: { select: { id: true, name: true, parentId: true } },
       },
-      orderBy: { updatedAt: "desc" },
+      orderBy: query.sort === "title" ? { title: "asc" } : { updatedAt: "desc" },
       take: 200,
     });
-    return { items };
+    const kind = query.kind === "library";
+    const status = query.status ? String(query.status).toUpperCase() : "";
+    const productIds = [...new Set(items.filter((row) => row.entityType === "product" && row.entityId).map((row) => row.entityId!))];
+    const products = productIds.length
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true, sku: true, category: { select: { id: true, name: true } }, family: { select: { name: true } } } })
+      : [];
+    const productById = new Map(products.map((row) => [row.id, row]));
+    const filtered = items.filter((row) => {
+      const latest = latestVersion(row.versions);
+      if (kind && !isLibraryModelName(latest?.fileName)) return false;
+      if (status && latest?.status !== status) return false;
+      return true;
+    });
+    return { items: filtered.map((row) => ({ ...row, product: row.entityType === "product" && row.entityId ? productById.get(row.entityId) || null : null })) };
   }
 
   @Post("documents")
@@ -498,15 +522,24 @@ export class PlatformController {
   }
 
   @Post("documents/:id/versions/:version/status")
-  @RequirePermissions("documents.approve")
   async versionStatus(@Param("id") id: string, @Param("version") version: string, @Body() raw: unknown, @Req() req: ReqUser) {
     const body = parseBody(versionStatusSchema, raw ?? {});
     const number = Number(version);
     if (!Number.isInteger(number) || number < 1) throw new BadRequestException("Invalid version");
+    await this.visibleDocument(id, req.user);
     const row = await this.prisma.documentVersion.findUnique({ where: { documentId_version: { documentId: id, version: number } } });
     if (!row) throw new NotFoundException("Version not found");
-    if (row.status === "APPROVED") throw new BadRequestException("An approved revision cannot be changed. Upload a new version.");
-    if (row.createdById === req.user.id && body.status === "APPROVED") throw new ForbiddenException("You cannot approve a revision you uploaded");
+    const document = await this.prisma.document.findUnique({ where: { id }, select: { createdById: true } });
+    const elevated = req.user.roleKeys.some((role) => ELEVATED.has(role));
+    const uploader = row.createdById === req.user.id || document?.createdById === req.user.id;
+    if (isBimLibraryStatus(body.status) && (isBimLibraryStatus(row.status) || row.status === "DRAFT")) {
+      assertStaff(req.user);
+      if (!uploader && !elevated && !can(req.user, "documents.create") && !can(req.user, "documents.approve")) throw new ForbiddenException("Only the uploader or an admin can change this status");
+    } else {
+      assertCan(req.user, "documents.approve");
+      if (row.status === "APPROVED") throw new BadRequestException("An approved revision cannot be changed. Upload a new version.");
+      if (row.createdById === req.user.id && body.status === "APPROVED") throw new ForbiddenException("You cannot approve a revision you uploaded");
+    }
     const updated = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.documentVersion.updateMany({ where: { id: row.id, status: row.status }, data: { status: body.status } });
       if (!claimed.count) throw new BadRequestException("Revision changed in the meantime; reload and try again");
@@ -532,12 +565,21 @@ export class PlatformController {
 
   @Get("documents/:id/thumbnail")
   @RequirePermissions("documents.view")
-  async thumbnail(@Param("id") id: string, @Req() req: ReqUser, @Res() res: Response) {
+  async thumbnail(@Param("id") id: string, @Query("version") version: string | undefined, @Req() req: ReqUser, @Res() res: Response) {
     const document = await this.visibleDocument(id, req.user);
-    const latest = document.versions[0];
-    if (!latest?.thumbnailKey || !/^image\/(png|jpeg|webp|gif)$/.test(latest.mimeType)) throw new NotFoundException("No preview");
-    const bytes = await this.storage.get(latest.thumbnailKey);
-    sendFile(res, bytes, latest.mimeType, latest.fileName, "inline");
+    const selected = version ? document.versions.find((item) => item.version === Number(version)) : document.versions[0];
+    if (!selected) throw new NotFoundException("No preview");
+    let thumbnailKey = selected.thumbnailKey;
+    if (!thumbnailKey && isRevitFamilyFile(selected.fileName)) {
+      const raw = await this.prisma.documentVersion.findUnique({ where: { id: selected.id } });
+      if (raw) {
+        const updated = await attachRevitPreview(this.storage, this.prisma.documentVersion, raw);
+        thumbnailKey = (updated as { thumbnailKey?: string | null }).thumbnailKey || null;
+      }
+    }
+    if (!thumbnailKey) throw new NotFoundException("No preview");
+    const bytes = await this.storage.get(thumbnailKey);
+    sendFile(res, bytes, "image/png", `${selected.fileName}.png`, "inline");
     res.setHeader("Cache-Control", "private, max-age=3600");
   }
 
@@ -624,7 +666,7 @@ export class PlatformController {
   async createFolder(@Body() raw: unknown, @Req() req: ReqUser) {
     assertStaff(req.user);
     const input = parseBody(folderCreateSchema, raw);
-    const name = folderName(input.name);
+    const name = await assertUniqueFolderName(this.prisma.documentFolder, { name: input.name, parentId: input.parentId, entityType: input.entityType, entityId: input.entityId });
     await this.assertEntity(input.entityType, input.entityId);
     if (input.parentId) await this.assertFolder(input.parentId, input.entityType, input.entityId);
     const row = await this.prisma.documentFolder.create({
@@ -647,6 +689,15 @@ export class PlatformController {
       const ancestors = await this.folderAncestors(input.parentId);
       if (ancestors.includes(id)) throw new BadRequestException("A folder cannot be moved inside itself");
     }
+    const nextName = input.name ? input.name : folder.name;
+    const nextParent = input.parentId === undefined ? folder.parentId : input.parentId;
+    await assertUniqueFolderName(this.prisma.documentFolder, {
+      name: nextName,
+      parentId: nextParent,
+      entityType: folder.entityType,
+      entityId: folder.entityId,
+      excludeId: id,
+    });
     const row = await this.prisma.documentFolder.update({
       where: { id },
       data: {
@@ -751,7 +802,11 @@ export class PlatformController {
     const audience = documentAudience(user);
     const document = await this.prisma.document.findFirst({
       where: { AND: [{ id }, await documentScope(this.prisma, user)], audiences: audience.length ? { hasSome: audience } : undefined },
-      include: { versions: { where: external ? { status: { in: PORTAL_VERSION_STATUSES } } : undefined, orderBy: { version: "desc" } } },
+      include: {
+        versions: { where: external ? { status: { in: PORTAL_VERSION_STATUSES } } : undefined, orderBy: { version: "desc" }, include: { createdBy: { select: { id: true, name: true } } } },
+        createdBy: { select: { id: true, name: true } },
+        folder: { select: { id: true, name: true, parentId: true } },
+      },
     });
     if (!document || !document.versions.length) throw new NotFoundException("Document not found");
     return document;
@@ -817,6 +872,16 @@ export class PlatformController {
     return target.documentId ? `documents/${target.documentId}/${randomUUID()}-${fileName}` : `${target.entityType || "library"}/${randomUUID()}-${fileName}`;
   }
 
+  private async afterRevitUpload<T extends { id: string }>(row: T) {
+    try {
+      const raw = await this.prisma.documentVersion.findFirst({ where: { OR: [{ id: row.id }, { documentId: row.id }] }, orderBy: { version: "desc" } });
+      if (raw) await attachRevitPreview(this.storage, this.prisma.documentVersion, raw);
+    } catch {
+      // Preview extraction must never fail an upload.
+    }
+    return row;
+  }
+
   /** Creates the document (version 1) or appends a new draft version to an existing one. */
   private async saveUpload(target: UploadTarget, file: StoredFile, req: ReqUser) {
     const ip = String(req.ip || "");
@@ -837,7 +902,7 @@ export class PlatformController {
         await tx.document.update({ where: { id: documentId }, data: { updatedAt: new Date() } });
         await this.audit.log({ actorId: req.user.id, action: "version", entityType: "document", entityId: documentId, after: { version, fileName: file.fileName, sizeBytes: file.sizeBytes }, ip }, tx);
         return row;
-      });
+      }).then((row) => this.afterRevitUpload(row));
     }
     return this.prisma.$transaction(async (tx) => {
       const row = await tx.document.create({
@@ -857,7 +922,7 @@ export class PlatformController {
       });
       await this.audit.log({ actorId: req.user.id, action: "create", entityType: "document", entityId: row.id, after: { title: row.title, category: row.category, audiences: row.audiences, fileName: file.fileName, sizeBytes: file.sizeBytes }, ip }, tx);
       return row;
-    });
+    }).then((row) => this.afterRevitUpload(row));
   }
 
   @Get("approvals")
