@@ -1,0 +1,91 @@
+name: Deploy API
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "docker-compose.prod.yml"
+      - "apps/api/Dockerfile"
+      - "deploy/**"
+      - ".github/workflows/deploy-api.yml"
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit SHA to deploy (defaults to this workflow SHA)"
+        required: false
+
+concurrency:
+  group: deploy-api-production
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: typecheck, lint, and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha || github.sha }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm --filter @fixotec/db build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+  deploy:
+    name: Deploy API to the VM
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.sha || github.sha }}
+          fetch-depth: 0
+      - name: Resolve the commit SHA
+        id: sha
+        env:
+          INPUT_SHA: ${{ github.event.inputs.sha }}
+        run: |
+          set -euo pipefail
+          raw="${INPUT_SHA:-${GITHUB_SHA}}"
+          sha="$(git rev-parse "$raw")"
+          if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Refusing to deploy a value that is not a 40-character SHA"
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Deploying $sha"
+      - name: Configure SSH
+        env:
+          VM_DEPLOY_SSH_KEY: ${{ secrets.VM_DEPLOY_SSH_KEY }}
+          VM_DEPLOY_KNOWN_HOSTS: ${{ secrets.VM_DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$VM_DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$VM_DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/id_ed25519" >/dev/null
+      - name: Ship the git archive and run the restricted deploy command
+        run: |
+          set -euo pipefail
+          git archive --format=tar.gz "${{ steps.sha.outputs.sha }}" | ssh -T -i "$HOME/.ssh/id_ed25519" \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o BatchMode=yes \
+            root@95.135.254.73 \
+            "${{ steps.sha.outputs.sha }}"

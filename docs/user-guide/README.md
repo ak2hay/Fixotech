@@ -81,6 +81,7 @@ The public website has no login. In demo mode it may ask for an HTTP password: t
 | 14 | [14-qa-cheat-sheet.md](14-qa-cheat-sheet.md) | Likely client questions with answers |
 | 15 | [15-glossary.md](15-glossary.md) | Every abbreviation explained |
 | 16 | [16-bim-portal.md](16-bim-portal.md) | Staff BIM portal: Revit/IFC library, folders, check-out, IFC 3D preview |
+| 17 | [17-deploy-pipeline.md](17-deploy-pipeline.md) | How code on GitHub main is deployed to Vercel and the API VM |
 
 **Study plan:**
 
